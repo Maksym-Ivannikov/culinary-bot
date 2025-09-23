@@ -19,7 +19,8 @@ async def cmd_start(message: types.Message):
         [InlineKeyboardButton("🍽 Страва дня", callback_data="daily_dish")],
         [InlineKeyboardButton("📅 Тижневе меню", callback_data="weekly_menu")],
         [InlineKeyboardButton("👤 Профіль", callback_data="profile")],
-        [InlineKeyboardButton("ℹ️ Допомога / Про бота", callback_data="help")]
+        [InlineKeyboardButton("ℹ️ Допомога / Про бота", callback_data="help")],
+        [InlineKeyboardButton("📝 Пропозиції та ідеї", callback_data="feedback")]  # 🔥 нова кнопка
     ])
 
     await message.answer(
@@ -37,14 +38,20 @@ async def cmd_start(message: types.Message):
 async def cmd_add(message: types.Message):
     args = message.get_args()
     if not args:
-        await message.reply("❗️ Введи продукт після команди /add, наприклад:\n/add яйця 3шт 14.07.2025")
+        await message.reply(
+            "❗️ Введи продукт після команди /add, наприклад:\n"
+            "/add помідори чері 300 г 14.07.2025, яйця 6 шт\n\n"
+            "• Назва може містити ПРОБІЛИ\n"
+            "• Кількість і одиниця — обовʼязково\n"
+            "• Термін придатності у форматі дд.мм.рррр — опційно"
+        )
         return
     await add_product_to_db(user_id=message.from_user.id, text=args)
-    await message.reply(f"✅ Додав продукт: {args}")
+    await message.reply(f"✅ Додав продукт(и): {args}")
 
 # Страва дня (через команду, необов’язково)
 async def cmd_menu(message: types.Message):
-    response = await suggest_recipe(user_id=message.from_user.id)
+    response = await suggest_recipe(user_id=message.from_user.id, meal_type="lunch")
     await message.reply(response)
 
 # Реєстрація хендлерів

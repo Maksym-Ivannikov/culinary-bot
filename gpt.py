@@ -3,8 +3,8 @@ load_dotenv()
 
 import os
 import re
-from datetime import datetime, timedelta
-from typing import List, Tuple
+from datetime import datetime, timedelta, date
+from typing import List, Tuple, Optional
 from openai import AsyncOpenAI
 from db import get_all_products_with_expiry, get_user_profile
 
@@ -20,11 +20,17 @@ BASIC_INGREDIENTS = [
 ]
 last_generated_ingredients = {}
 
+def _parse_ddmmyyyy(d: str) -> Optional[date]:
+    try:
+        return datetime.strptime(d, "%d.%m.%Y").date()
+    except Exception:
+        return None
+
 async def suggest_recipe(user_id: int, meal_type: str) -> str:
     global last_generated_ingredients
     last_generated_ingredients.clear()
 
-    products: List[Tuple[str, int, str, str]] = await get_all_products_with_expiry(user_id)
+    products: List[Tuple[str, int, str, Optional[str]]] = await get_all_products_with_expiry(user_id)
     profile = await get_user_profile(user_id)
 
     if not products:
@@ -49,15 +55,15 @@ async def suggest_recipe(user_id: int, meal_type: str) -> str:
         name_lower = name.lower()
         if any(a in name_lower for a in allergies + dislikes):
             continue
-        try:
-            expiry_date = datetime.strptime(expiry_str, "%d.%m.%Y").date()
-        except ValueError:
+
+        expiry_date = _parse_ddmmyyyy(expiry_str) if expiry_str else None
+
+        # ігноруємо прострочені, інші беремо, у т.ч. без дати
+        if expiry_date is not None and expiry_date < today:
             continue
-        if expiry_date < today:
-            continue  # ⛔️ пропускаємо прострочені
 
         item_str = f"{name} {quantity} {unit}"
-        if expiry_date <= tomorrow:
+        if expiry_date is not None and expiry_date <= tomorrow:
             priority_products.append(item_str)
         else:
             other_products.append(item_str)
@@ -113,7 +119,7 @@ async def suggest_recipe(user_id: int, meal_type: str) -> str:
         f"2. Крок 2\n"
         f"...\n"
         f"❗ Без жодних побажань, коментарів, пояснень. Лише чіткий рецепт у вказаному форматі."
-)
+    )
 
     print("PROMPT:\n", prompt)
 
@@ -169,7 +175,21 @@ def extract_ingredients(text: str) -> dict:
     return ingredients
 
 
-def filter_expired_batches_before_deduction(product_batches: List[Tuple[int, float, datetime]]) -> List[Tuple[int, float, datetime]]:
-    """Фільтрує партії продуктів, у яких термін придатності ще не минув."""
+def filter_expired_batches_before_deduction(
+    product_batches: List[Tuple[int, float, Optional[datetime]]]
+) -> List[Tuple[int, float, Optional[datetime]]]:
+    """Повертає лише не прострочені партії. None (без терміну) вважаємо придатними."""
     today = datetime.today().date()
-    return [batch for batch in product_batches if batch[2].date() >= today]
+    kept = []
+    for batch in product_batches:
+        exp_dt = batch[2]
+        if exp_dt is None:
+            kept.append(batch)
+        else:
+            try:
+                if exp_dt.date() >= today:
+                    kept.append(batch)
+            except Exception:
+                # якщо дата зіпсована — перестраховка: відкидаємо
+                pass
+    return kept

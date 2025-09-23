@@ -16,25 +16,30 @@ bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN"))
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
+# читаємо ID каналу для фідбеку
+FEEDBACK_CHAT_ID = os.getenv("FEEDBACK_CHAT_ID")
+
 # Ініціалізація БД при старті
 init_db()
 
 # Реєстрація хендлерів
 register_handlers(dp)
-register_callback_handlers(dp)
+register_callback_handlers(dp, bot, FEEDBACK_CHAT_ID)
 
 @aiocron.crontab('0 9 * * *')  # Щодня о 09:00
 async def daily_expiry_check():
     print("⏰ Запуск щоденної перевірки терміну придатності")
     users_products = await get_all_products_grouped_by_user()
-    today = datetime.today().strftime("%d.%m.%Y")
+    today_str = datetime.today().strftime("%d.%m.%Y")
 
     for user_id, products in users_products.items():
-        expiring = [
-            f"{name} (до {date})"
-            for name, date in products
-            if date == today
-        ]
+        expiring = []
+        for name, date_str in products:
+            if not date_str:
+                continue
+            if date_str == today_str:
+                expiring.append(f"{name} (до {date_str})")
+
         if expiring:
             text = (
                 "🔔 Продукти, у яких сьогодні спливає термін придатності:\n"
@@ -43,18 +48,24 @@ async def daily_expiry_check():
             )
             await bot.send_message(user_id, text)
 
-@aiocron.crontab('0 10 * * 1')  # Щопонеділка о 10:00
+@aiocron.crontab('0 9 * * 6')  # Щосуботи о 9:00
 async def weekly_expired_check():
     print("🔁 Щотижнева перевірка прострочених продуктів")
     users_products = await get_all_products_grouped_by_user()
     today = datetime.today()
 
     for user_id, products in users_products.items():
-        expired = [
-            f"{name} (до {date})"
-            for name, date in products
-            if datetime.strptime(date, "%d.%m.%Y") < today
-        ]
+        expired = []
+        for name, date_str in products:
+            if not date_str:
+                continue
+            try:
+                exp = datetime.strptime(date_str, "%d.%m.%Y")
+            except ValueError:
+                continue
+            if exp < today:
+                expired.append(f"{name} (до {date_str})")
+
         if expired:
             text = (
                 "❗ У тебе є продукти з простроченим терміном придатності:\n"

@@ -1,16 +1,29 @@
 import os
-print("📢 Використовується база:", os.path.abspath("products.db"))
-
 import sqlite3
 import re
 from datetime import datetime
 from typing import List, Tuple, Optional
 
+# ====== Налаштування шляху до БД ======
+# Підтримуємо обидві змінні на всякий випадок:
+DB_PATH = os.getenv("PRODUCTS_DB_PATH") or os.getenv("DB_PATH") or "products.db"
+
+# створимо папку, якщо це щось типу /data/products.db
+db_dir = os.path.dirname(DB_PATH)
+if db_dir and not os.path.exists(db_dir):
+    os.makedirs(db_dir, exist_ok=True)
+
+print("📢 Використовується база:", os.path.abspath(DB_PATH))
+
+def _connect():
+    # окремий хелпер щоб не повторюватись
+    return sqlite3.connect(DB_PATH)
+
+# ====== Ініціалізація ======
 def init_db():
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
 
-    # Таблиця продуктів
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +35,6 @@ def init_db():
         )
     """)
 
-    # Таблиця профілю користувача
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS profile (
             user_id INTEGER PRIMARY KEY,
@@ -51,69 +63,41 @@ def normalize_name(name: str) -> str:
 DATE_RE = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 
 def _extract_optional_date(s: str) -> tuple[str, Optional[str]]:
-    """
-    Видаляє з рядка першу знайдену дату у форматі dd.mm.yyyy і повертає (рядок_без_дати, дата|None).
-    """
     m = DATE_RE.search(s)
     if not m:
         return s.strip(), None
     date_str = m.group(0)
-    # Перевіримо валідність
     try:
         datetime.strptime(date_str, "%d.%m.%Y")
     except ValueError:
-        # якщо не валідна (теоретично не повинно статися з таким регексом) — ігноруємо
         return s.strip(), None
-    # прибираємо дату
     s_wo = (s[:m.start()] + s[m.end():]).strip()
-    # прибираємо зайві пробіли/дефіси/дужки поруч
     s_wo = re.sub(r"[\(\)\-–—]*\s*$", "", s_wo).strip()
     s_wo = re.sub(r"\s{2,}", " ", s_wo)
     return s_wo, date_str
 
 def _parse_one_item(raw: str) -> Optional[tuple[str, float, str, Optional[str]]]:
-    """
-    Парсимо один запис виду:
-    'помідори чері 300 г 25.07.2025' або 'яйця 6 шт' (без дати).
-    Повертаємо: (name, quantity, unit, expiry|None) або None якщо не вдалось.
-    Кількість і одиниця — обов'язкові.
-    """
     s = raw.strip()
     if not s:
         return None
-
-    # 1) забираємо опційний термін
     s_no_date, date_str = _extract_optional_date(s)
-
-    # 2) парсимо справа наліво: ... name ... | quantity | unit
     parts = s_no_date.split()
     if len(parts) < 3:
         return None
-
     unit = parts[-1]
     qty_str = parts[-2]
     name = " ".join(parts[:-2]).strip().lower()
     if not name:
         return None
-
-    # кількість має бути числом
     try:
         quantity = float(qty_str.replace(",", "."))
     except ValueError:
         return None
-
     return (normalize_name(name), quantity, unit, date_str)
 
 # --- Продукти ---
 
 async def add_product_to_db(user_id: int, text: str):
-    """
-    Підтримує:
-      • назви з пробілами
-      • кількість та одиниця — обов'язково
-      • термін у форматі dd.mm.yyyy — опційно (може стояти будь-де в елементі)
-    Елементи розділяються комою.
-    """
     items = [it for it in (x.strip() for x in text.split(",")) if it]
     parsed = []
     for raw in items:
@@ -126,13 +110,12 @@ async def add_product_to_db(user_id: int, text: str):
     if not parsed:
         return
 
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     for entry in parsed:
-        uid, name, qty, unit, expiry = entry  # expiry може бути None
+        uid, name, qty, unit, expiry = entry
 
         if expiry is None:
-            # шукаємо існуючий без терміну
             cursor.execute("""
                 SELECT id, quantity FROM products
                 WHERE user_id = ? AND name = ? AND unit = ? AND expiry_date IS NULL
@@ -158,7 +141,7 @@ async def add_product_to_db(user_id: int, text: str):
     conn.close()
 
 async def get_all_products(user_id: int) -> List[str]:
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT name, quantity, unit, expiry_date FROM products WHERE user_id = ?", (user_id,))
     rows = cursor.fetchall()
@@ -173,7 +156,7 @@ async def get_all_products(user_id: int) -> List[str]:
     return view
 
 async def get_all_products_with_expiry(user_id: int) -> List[Tuple[str, float, str, Optional[str]]]:
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT name, quantity, unit, expiry_date FROM products WHERE user_id = ?", (user_id,))
     rows = cursor.fetchall()
@@ -181,7 +164,7 @@ async def get_all_products_with_expiry(user_id: int) -> List[Tuple[str, float, s
     return rows
 
 async def get_all_products_grouped_by_user() -> dict:
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, name, expiry_date FROM products")
     rows = cursor.fetchall()
@@ -193,7 +176,7 @@ async def get_all_products_grouped_by_user() -> dict:
     return users
 
 async def get_all_products_with_ids(user_id: int) -> List[Tuple[int, str, float, str, Optional[str]]]:
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, quantity, unit, expiry_date FROM products WHERE user_id = ?", (user_id,))
     rows = cursor.fetchall()
@@ -201,7 +184,7 @@ async def get_all_products_with_ids(user_id: int) -> List[Tuple[int, str, float,
     return rows
 
 async def delete_product_by_id(product_id: int):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
@@ -209,14 +192,14 @@ async def delete_product_by_id(product_id: int):
 
 async def delete_product(user_id: int, name: str):
     name = normalize_name(name)
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM products WHERE user_id = ? AND name = ?", (user_id, name))
     conn.commit()
     conn.close()
 
 async def update_product_quantity_by_id(product_id: int, new_quantity: float):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("UPDATE products SET quantity = ? WHERE id = ?", (new_quantity, product_id))
     conn.commit()
@@ -226,7 +209,7 @@ async def get_expiring_products(user_id: int, days_threshold: int = 2) -> List[s
     today = datetime.now()
     result = []
 
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT name, quantity, unit, expiry_date FROM products WHERE user_id = ?", (user_id,))
     rows = cursor.fetchall()
@@ -254,7 +237,7 @@ async def get_fridge_view(user_id: int) -> str:
 # --- Профіль користувача ---
 
 async def get_user_profile(user_id: int) -> dict:
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("SELECT allergies, dislikes, status FROM profile WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -273,7 +256,7 @@ async def get_user_profile(user_id: int) -> dict:
         }
 
 async def update_user_allergies(user_id: int, new_allergies: str):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
 
     cursor.execute("SELECT allergies FROM profile WHERE user_id = ?", (user_id,))
@@ -293,9 +276,8 @@ async def update_user_allergies(user_id: int, new_allergies: str):
     conn.commit()
     conn.close()
 
-
 async def update_user_dislikes(user_id: int, new_dislikes: str):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
 
     cursor.execute("SELECT dislikes FROM profile WHERE user_id = ?", (user_id,))
@@ -316,7 +298,7 @@ async def update_user_dislikes(user_id: int, new_dislikes: str):
     conn.close()
 
 async def update_user_status(user_id: int, status: str):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO profile (user_id, status) VALUES (?, ?)
@@ -324,17 +306,16 @@ async def update_user_status(user_id: int, status: str):
     """, (user_id, status))
     conn.commit()
     conn.close()
-    
+
 async def clear_user_allergies(user_id: int):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("UPDATE profile SET allergies = NULL WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
-
 async def clear_user_dislikes(user_id: int):
-    conn = sqlite3.connect("products.db")
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute("UPDATE profile SET dislikes = NULL WHERE user_id = ?", (user_id,))
     conn.commit()

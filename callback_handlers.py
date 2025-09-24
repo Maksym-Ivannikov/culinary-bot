@@ -39,7 +39,7 @@ class FeedbackState(StatesGroup):
     waiting_for_text = State()
 
 # =========================
-#        КНОПКИ / КЛАВІ
+#        КНОПКИ / КЛАВІАТУРИ
 # =========================
 def root_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -52,7 +52,7 @@ def root_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    # залишено для сумісності з твоїм кодом
+    # залишено для сумісності з старим кодом
     return root_menu_keyboard()
 
 def back_to_delete_list_keyboard() -> InlineKeyboardMarkup:
